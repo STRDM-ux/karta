@@ -4,3 +4,5 @@ out
 .env
 *.wav
 *.mp4
+.dev.vars
+.wrangler
