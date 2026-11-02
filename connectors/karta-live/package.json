@@ -1,0 +1,16 @@
+{
+  "name": "@karta/live",
+  "version": "0.1.0",
+  "description": "Karta Live: see what Higgsfield is making for your beat, in time with FL Studio.",
+  "type": "module",
+  "bin": { "karta-live": "dist/main.js" },
+  "scripts": {
+    "prestart": "npm run build -w @karta/art-engine",
+    "start": "tsx src/main.ts start --open",
+    "install-fl": "tsx src/main.ts install",
+    "login": "tsx src/main.ts login",
+    "build": "tsc -p .",
+    "test": "python3 ../fl-studio/test/test_device.py && node --import tsx --test --test-force-exit test/*.test.ts"
+  },
+  "dependencies": { "@karta/art-engine": "0.1.0" }
+}

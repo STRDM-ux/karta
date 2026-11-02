@@ -446,6 +446,7 @@ export class KartaDB extends DurableObject<Env> {
   op_mediaKey(v: Viewer, a: Args) {
     // public media: previews, covers and generated art of non-draft beats; profile images
     const kind = text(a.kind, 20);
+    if (a.scope === 'live') return { key: `live/${text(a.id, 40)}/${text(a.kind, 80)}` };
     if (a.scope === 'profiles') {
       const col = kind === 'banner' ? 'banner' : 'avatar';
       const p = this.one(`SELECT ${col} AS v FROM profiles WHERE user_id = ?`, text(a.id, 40));

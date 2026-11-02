@@ -18,6 +18,17 @@ export const folderUploader = (dir: string, baseUrl: string): Uploader => async 
   return `${baseUrl.replace(/\/$/, '')}/${name}`;
 };
 
+/** Progress events, for live previews (Karta Live in FL Studio, the web editor). */
+export type EngineEvent =
+  | { type: 'stage'; stage: 'analyzing' | 'designing' | 'cover' | 'visualizer' | 'higgsfield' | 'assembling' | 'publishing' | 'done'; message: string }
+  | { type: 'features'; features: AudioFeatures }
+  | { type: 'dna'; dna: VisualDNA }
+  | { type: 'art'; art: RenderedArt }
+  | { type: 'prompts'; still: string; shots: Shot[] }
+  | { type: 'shot'; index: number; aspect: '16:9' | '9:16'; status: 'queued' | 'in_progress' | 'completed' | 'failed' | 'nsfw' | 'canceled' | 'downloaded'; file?: string; error?: string }
+  | { type: 'video'; kind: 'wide' | 'tall' | 'cinematicWide' | 'cinematicTall'; file: string }
+  | { type: 'error'; message: string };
+
 export interface PipelineOptions {
   audio: string;
   meta: BeatMeta & { bpmHint?: number; keyHint?: string };
@@ -27,6 +38,9 @@ export interface PipelineOptions {
   higgsfield?: { client?: Higgsfield; uploader: Uploader; maxShots?: number; still?: boolean };
   publish?: { platforms: Platform[]; credentials: Credentials; privacy?: 'public' | 'private' | 'unlisted'; uploader?: Uploader; storeUrl?: string; priceFrom?: string };
   log?: (msg: string) => void;
+  onEvent?: (e: EngineEvent) => void;
+  /** Higgsfield status polling interval (default 5 s). */
+  pollMs?: number;
 }
 
 export interface PipelineResult {
@@ -41,10 +55,12 @@ export interface PipelineResult {
 }
 
 export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
-  const log = o.log ?? (() => {});
+  const emit = (e: EngineEvent) => { try { o.onEvent?.(e); } catch { /* a listener must never break the render */ } };
+  const log = (m: string) => { o.log?.(m); };
+  const stage = (s: Extract<EngineEvent, { type: 'stage' }>['stage'], message: string) => { log(message); emit({ type: 'stage', stage: s, message }); };
   await mkdir(o.outDir, { recursive: true });
 
-  log('Analyzing the beat');
+  stage('analyzing', 'Analyzing the beat');
   const features = await analyzeFile(o.audio, { genre: o.meta.genre, bpmHint: o.meta.bpmHint });
   // the key the producer typed in wins over detection
   const k = o.meta.keyHint?.trim().match(/^([A-G])([#b]?)(m|min|minor)?$/i);
@@ -56,45 +72,65 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
     features.key = { tonic, mode, label: tonic + (mode === 'minor' ? 'm' : ''), confidence: 1 };
   }
   log(`  ${features.bpm} BPM · ${features.key.label} · energy ${features.energy} · drop at ${features.drop}s`);
+  emit({ type: 'features', features });
 
+  stage('designing', 'Turning the sound into a visual DNA');
   const dna = buildDNA(features, o.meta);
   log(`Visual DNA: ${dna.pattern} pattern, ${dna.mood.join(', ')}, ${dna.motion.pace} motion`);
+  emit({ type: 'dna', dna });
 
-  log('Rendering cover art, thumbnail and video frames');
+  stage('cover', 'Rendering cover art, thumbnail and video frames');
   const art = await renderArt(features, dna, o.outDir);
+  emit({ type: 'art', art });
 
   const prompts = { still: stillPrompt(dna), shots: shotList(features, dna, o.higgsfield?.maxShots ?? 4) };
+  emit({ type: 'prompts', ...prompts });
   const videos: PipelineResult['videos'] = {};
   const shortLen = Math.min(o.shortSeconds ?? 30, Math.max(5, features.duration - features.drop));
   const shortStart = Math.max(0, Math.min(features.drop, features.duration - shortLen));
 
   if (o.video !== false) {
-    log('Rendering visualizer videos (16:9 full beat, 9:16 from the drop)');
+    stage('visualizer', 'Rendering visualizer videos (16:9 full beat, 9:16 from the drop)');
     videos.wide = await renderVisualizer({ audio: o.audio, frame: art.frameWide, out: join(o.outDir, 'youtube.mp4'), width: 1920, height: 1080, color: dna.palette.primary, color2: dna.palette.accent });
+    emit({ type: 'video', kind: 'wide', file: videos.wide });
     videos.tall = await renderVisualizer({ audio: o.audio, frame: art.frameTall, out: join(o.outDir, 'short.mp4'), width: 1080, height: 1920, color: dna.palette.primary, start: shortStart, duration: shortLen });
+    emit({ type: 'video', kind: 'tall', file: videos.tall });
   }
 
   if (o.higgsfield) {
     const hf = o.higgsfield.client ?? new Higgsfield();
-    log('Uploading the clean cover so Higgsfield can use it as the reference');
+    stage('higgsfield', 'Sending the cover to Higgsfield as the reference image');
     const coverUrl = await o.higgsfield.uploader(art.coverClean, 'image/jpeg');
     if (o.higgsfield.still) {
       log('Higgsfield: cinematic still');
       videos.higgsfieldStill = await download(await hf.image(prompts.still), join(o.outDir, 'higgsfield-still.jpg'));
     }
     const wideClips: string[] = [], tallClips: string[] = [];
+    const one = async (i: number, shot: Shot, aspect: '16:9' | '9:16') => {
+      try {
+        const url = await hf.referenceToVideo({
+          imageUrls: [coverUrl], prompt: shot.prompt, aspect, duration: shot.duration, intervalMs: o.pollMs,
+          onStatus: (status) => emit({ type: 'shot', index: i, aspect, status }),
+        });
+        const file = await download(url, join(o.outDir, `hf-${i}-${aspect === '16:9' ? 'wide' : 'tall'}.mp4`));
+        emit({ type: 'shot', index: i, aspect, status: 'downloaded', file });
+        return file;
+      } catch (e) {
+        emit({ type: 'shot', index: i, aspect, status: 'failed', error: (e as Error).message });
+        throw e;
+      }
+    };
     for (const [i, shot] of prompts.shots.entries()) {
       log(`Higgsfield: ${shot.section} shot (${shot.duration}s), 16:9 and 9:16`);
-      const [w, t] = await Promise.all([
-        hf.referenceToVideo({ imageUrls: [coverUrl], prompt: shot.prompt, aspect: '16:9', duration: shot.duration }),
-        hf.referenceToVideo({ imageUrls: [coverUrl], prompt: shot.prompt, aspect: '9:16', duration: shot.duration }),
-      ]);
-      wideClips.push(await download(w, join(o.outDir, `hf-${i}-wide.mp4`)));
-      tallClips.push(await download(t, join(o.outDir, `hf-${i}-tall.mp4`)));
+      const [w, t] = await Promise.all([one(i, shot, '16:9'), one(i, shot, '9:16')]);
+      wideClips.push(w);
+      tallClips.push(t);
     }
-    log('Cutting Higgsfield clips to the bar line under the beat');
+    stage('assembling', 'Cutting Higgsfield clips to the bar line under the beat');
     videos.cinematicWide = await assembleCinematic({ clips: wideClips, audio: o.audio, out: join(o.outDir, 'youtube-cinematic.mp4'), width: 1920, height: 1080, cutSeconds: dna.motion.cutSeconds, beatOffset: features.beatOffset, duration: features.duration, color: dna.palette.accent });
+    emit({ type: 'video', kind: 'cinematicWide', file: videos.cinematicWide });
     videos.cinematicTall = await assembleCinematic({ clips: tallClips, audio: o.audio, out: join(o.outDir, 'short-cinematic.mp4'), width: 1080, height: 1920, cutSeconds: dna.motion.cutSeconds, beatOffset: features.beatOffset, start: shortStart, duration: shortLen, color: dna.palette.accent });
+    emit({ type: 'video', kind: 'cinematicTall', file: videos.cinematicTall });
   }
 
   const copy = buildCopy(dna, { storeUrl: o.publish?.storeUrl, priceFrom: o.publish?.priceFrom, tags: o.meta.tags });
@@ -103,11 +139,12 @@ export async function runPipeline(o: PipelineOptions): Promise<PipelineResult> {
     const wide = videos.cinematicWide ?? videos.wide, tall = videos.cinematicTall ?? videos.tall;
     if (!wide || !tall) throw new Error('Publishing needs videos; run without --no-video.');
     const tallUrl = o.publish.platforms.includes('instagram') && o.publish.uploader ? await o.publish.uploader(tall, 'video/mp4') : undefined;
-    log(`Publishing to ${o.publish.platforms.join(', ')}`);
+    stage('publishing', `Publishing to ${o.publish.platforms.join(', ')}`);
     published = await publish(o.publish.platforms, { wide, tall, thumbnail: art.thumbnail, tallUrl }, copy, o.publish.credentials, o.publish.privacy);
   }
 
   const manifest = join(o.outDir, 'karta.json');
   await writeFile(manifest, JSON.stringify({ meta: o.meta, features, dna, art, prompts, videos, copy, published }, null, 2));
+  stage('done', 'Done');
   return { features, dna, art, prompts, videos, copy, published, manifest };
 }

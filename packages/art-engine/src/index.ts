@@ -5,4 +5,4 @@ export { renderVisualizer, assembleCinematic } from './video/render.js';
 export { Higgsfield } from './higgsfield/client.js';
 export { stillPrompt, shotList, type Shot } from './higgsfield/prompts.js';
 export { buildCopy, publish, type Platform, type Credentials, type PublishResult } from './publish/index.js';
-export { runPipeline, folderUploader, type PipelineOptions, type PipelineResult, type Uploader } from './pipeline.js';
+export { runPipeline, folderUploader, type PipelineOptions, type PipelineResult, type Uploader, type EngineEvent } from './pipeline.js';

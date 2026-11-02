@@ -131,6 +131,16 @@ route('POST', '/studio/beats/:id/art', async (c) => {
   return json({ ok: true, data: { jobId: job.jobId, status: 'queued' } });
 });
 route('GET', '/studio/beats/:id/art', (c) => call(c, 'artStatus', { id: c.params[0] }));
+/* Karta Live (FL Studio): hosts a reference image or clip at a public URL so Higgsfield can fetch it */
+route('PUT', '/studio/live/:name', async (c) => {
+  const me = await op<{ id: string; role: string }>(c.env, 'me', c.token);
+  if (me.role !== 'producer') throw new ApiError(403, 'Only producer accounts can do that.');
+  const type = c.request.headers.get('Content-Type') ?? '';
+  if (!/^(image\/(jpeg|png|webp)|video\/mp4|audio\/(mpeg|wav|x-wav))$/.test(type)) throw new ApiError(400, 'Send a JPG, PNG, WebP, MP4, MP3 or WAV.');
+  const file = `${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}-${c.params[0].replace(/[^\w.\-]+/g, '').slice(0, 60) || 'file'}`;
+  await receive(c, `live/${me.id}/${file}`, type);
+  return json({ ok: true, data: { url: `${c.url.origin}/media/live/${me.id}/${file}` } });
+});
 route('POST', '/studio/payouts', (c) => call(c, 'payoutsLink'));
 route('GET', '/studio/payouts', (c) => call(c, 'payoutsStatus'));
 route('POST', '/studio/payouts/dashboard', (c) => call(c, 'dashboardLink'));
@@ -145,7 +155,7 @@ route('GET', '/dl/:token/:kind', async (c) => {
 });
 
 /* ---------- public media: previews, covers, generated art, profile images ---------- */
-route('GET', '/media/(beats|profiles)/:id/:kind', async (c) => {
+route('GET', '/media/(beats|profiles|live)/:id/:kind', async (c) => {
   const { key } = await op<{ key: string }>(c.env, 'mediaKey', c.token, { scope: c.params[0], id: c.params[1], kind: c.params[2] });
   return streamMedia(await getMedia(c.env, key, c.request), { 'Cache-Control': 'public, max-age=3600' });
 });

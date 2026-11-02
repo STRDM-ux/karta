@@ -25,12 +25,14 @@ export class Higgsfield {
     return res.json() as Promise<{ request_id: string; status_url: string }>;
   }
 
-  async wait(statusUrl: string, { intervalMs = 5000, timeoutMs = 15 * 60_000 } = {}): Promise<HiggsfieldResult> {
+  async wait(statusUrl: string, { intervalMs = 5000, timeoutMs = 15 * 60_000, onStatus }: { intervalMs?: number; timeoutMs?: number; onStatus?: (s: HiggsfieldResult['status']) => void } = {}): Promise<HiggsfieldResult> {
     const until = Date.now() + timeoutMs;
+    let last = '';
     while (Date.now() < until) {
       const res = await fetch(statusUrl, { headers: this.headers() });
       if (!res.ok) throw new Error(`Higgsfield status returned ${res.status}: ${await res.text()}`);
       const r = (await res.json()) as HiggsfieldResult;
+      if (r.status !== last) { last = r.status; onStatus?.(r.status); }
       if (r.status === 'completed') return r;
       if (r.status === 'failed' || r.status === 'nsfw' || r.status === 'canceled') throw new Error(`Higgsfield job ended with status "${r.status}"`);
       await new Promise((ok) => setTimeout(ok, intervalMs));
@@ -39,7 +41,7 @@ export class Higgsfield {
   }
 
   /** Seedance 2.0 reference-to-video: the cover art (and optionally the beat) guide the clip. */
-  async referenceToVideo(o: { imageUrls: string[]; audioUrls?: string[]; prompt: string; aspect: '16:9' | '9:16' | '1:1'; duration: number; resolution?: '720p' | '1080p' }): Promise<string> {
+  async referenceToVideo(o: { imageUrls: string[]; audioUrls?: string[]; prompt: string; aspect: '16:9' | '9:16' | '1:1'; duration: number; resolution?: '720p' | '1080p'; onStatus?: (s: HiggsfieldResult['status']) => void; intervalMs?: number }): Promise<string> {
     const job = await this.submit('/bytedance/seedance-2.0/reference-to-video', {
       prompt: o.prompt,
       image_urls: o.imageUrls,
@@ -49,7 +51,8 @@ export class Higgsfield {
       resolution: o.resolution ?? '1080p',
       generate_audio: false, // the beat is laid under the video afterwards
     });
-    const r = await this.wait(job.status_url);
+    o.onStatus?.('queued');
+    const r = await this.wait(job.status_url, { onStatus: o.onStatus, intervalMs: o.intervalMs });
     if (!r.video?.url) throw new Error('Higgsfield finished without a video URL');
     return r.video.url;
   }

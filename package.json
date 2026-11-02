@@ -5,13 +5,15 @@
   "workspaces": [
     "packages/*",
     "functions",
-    "web"
+    "web",
+    "connectors/karta-live"
   ],
   "scripts": {
     "build": "npm run build -w @karta/art-engine && npm run build -w @karta/web",
-    "test": "npm test -w @karta/art-engine && npm test -w karta-functions",
+    "test": "npm test -w @karta/art-engine && npm test -w karta-functions && npm test -w @karta/live",
     "art": "npm run art -w @karta/art-engine --",
     "dev:api": "npm run dev -w karta-functions",
-    "dev:web": "npm run dev -w @karta/web"
+    "dev:web": "npm run dev -w @karta/web",
+    "live": "npm start -w @karta/live"
   }
 }

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karta Live</title>
+<style>
+@font-face { font-family: "Archivo"; src: url("/fonts/archivo-v2.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Akira Expanded"; src: url("/fonts/akira-expanded-v1.otf") format("opentype"); font-weight: 400 900; font-display: swap; }
+/* STRDM tokens (web/src/index.css): black, hot pink, cyan */
+:root {
+  --bg: #000; --card: #0a0a0d; --card2: #121217; --line: #22222a; --fg: #f6f6fa; --muted: #9e9eae;
+  --pink: #ff3d8a; --pink-fill: #e6005c; --cyan: #00e1ff; --amber: #ffbf33; --ok: #26d980;
+  --display: "Akira Expanded", "Anton", Impact, "Archivo", sans-serif;
+  --body: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: radial-gradient(900px 500px at 85% -10%, rgba(255,61,138,.12), transparent 60%), radial-gradient(700px 400px at -10% 110%, rgba(0,225,255,.07), transparent 60%), var(--bg); color: var(--fg); font: 14px/1.5 var(--body); }
+button { font: inherit; color: inherit; cursor: pointer; }
+.display { font-family: var(--display); text-transform: uppercase; letter-spacing: .02em; font-weight: 400; }
+.eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; color: var(--pink); }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); white-space: nowrap; }
+.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.pill.on .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.pill.warn .dot { background: var(--amber); }
+.pill.live { background: var(--pink-fill); border-color: var(--pink-fill); color: #fff; }
+header { display: flex; align-items: center; gap: 14px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: rgba(0,0,0,.85); position: sticky; top: 0; z-index: 5; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.brand img { width: 28px; height: 28px; filter: drop-shadow(0 0 8px rgba(255,61,138,.55)); }
+.brand b { font-family: var(--display); font-size: 18px; text-transform: uppercase; }
+.brand small { display: block; font-size: 9px; letter-spacing: .3em; color: var(--muted); font-weight: 700; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px 18px 28px; max-width: 1500px; margin: 0 auto; }
+@media (max-width: 980px) { main { grid-template-columns: minmax(0, 1fr); } }
+.monitor { position: relative; aspect-ratio: 16 / 9; width: 100%; background: #050507; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 0 80px -30px rgba(255,61,138,.6); }
+.monitor.tall { aspect-ratio: 9 / 16; max-height: 70vh; width: auto; margin: 0 auto; }
+.monitor video, .monitor img.still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.monitor img.still { filter: blur(0); transition: filter .4s; }
+.monitor img.still.wait { filter: blur(14px) brightness(.55); transform: scale(1.06); }
+.overlay { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; pointer-events: none; }
+.tag { background: rgba(0,0,0,.65); backdrop-filter: blur(6px); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+.tag .display { font-size: 14px; }
+.center { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; }
+.spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.15); border-top-color: var(--pink); animation: spin .9s linear infinite; margin: 0 auto 12px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.drop { border: 2px dashed var(--line); border-radius: 12px; padding: 26px; text-align: center; }
+.drop.over { border-color: var(--pink); background: rgba(255,61,138,.06); }
+.timeline { position: relative; height: 58px; margin-top: 12px; border-radius: 10px; overflow: hidden; background: var(--card2); border: 1px solid var(--line); cursor: pointer; user-select: none; }
+.seg { position: absolute; top: 0; bottom: 0; border-right: 1px solid rgba(0,0,0,.6); padding: 6px 8px; overflow: hidden; }
+.seg b { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.seg span { font-size: 11px; color: rgba(255,255,255,.75); }
+.seg .st { position: absolute; right: 6px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.35); }
+.seg .st.in_progress, .seg .st.queued { background: var(--amber); animation: pulse 1.2s infinite; }
+.seg .st.downloaded, .seg .st.completed { background: var(--ok); }
+.seg .st.failed { background: #ff5a5a; }
+@keyframes pulse { 50% { opacity: .35; } }
+.wave { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; opacity: .55; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 10px #fff; pointer-events: none; }
+.drop-mark { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--pink); pointer-events: none; }
+.transport { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 8px 14px; font-weight: 600; }
+.btn:hover { border-color: rgba(255,255,255,.4); }
+.btn.primary { background: linear-gradient(100deg, #ff3d8a, #e64dbf 50%, #00e1ff); border: 0; color: #fff; font-weight: 700; }
+.btn:disabled { opacity: .45; cursor: default; }
+.seg-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-left: auto; }
+.seg-toggle button { border: 0; background: transparent; padding: 7px 12px; font-weight: 600; color: var(--muted); }
+.seg-toggle button[aria-pressed="true"] { background: var(--card2); color: var(--fg); }
+aside { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+aside .panel { padding: 14px; }
+h2 { font-size: 13px; margin: 0 0 10px; font-weight: 700; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; text-align: center; }
+.stats div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 2px; }
+.stats dt { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.stats dd { margin: 0; font-family: var(--mono); font-weight: 600; font-size: 13px; }
+.swatches { display: flex; gap: 6px; margin-top: 10px; }
+.swatches i { flex: 1; height: 22px; border-radius: 6px; border: 1px solid rgba(255,255,255,.1); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+.chips span { border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+ol.stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+ol.stages li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+ol.stages li::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--line); flex: none; }
+ol.stages li.done { color: var(--fg); }
+ol.stages li.done::before { background: var(--ok); border-color: var(--ok); }
+ol.stages li.now { color: var(--fg); font-weight: 600; }
+ol.stages li.now::before { border-color: var(--pink); border-top-color: transparent; animation: spin .9s linear infinite; }
+.shot { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 6px; }
+.shot + .shot { margin-top: 8px; }
+.shot header { all: unset; display: flex; align-items: center; gap: 8px; }
+.shot header b { text-transform: capitalize; }
+.shot p { margin: 0; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.shot.open p { -webkit-line-clamp: unset; }
+.st-pill { font-size: 11px; border-radius: 6px; padding: 1px 6px; background: var(--card2); color: var(--muted); font-weight: 600; }
+.st-pill.in_progress, .st-pill.queued { color: var(--amber); }
+.st-pill.downloaded, .st-pill.completed { color: var(--ok); }
+.st-pill.failed, .st-pill.nsfw { color: #ff6b6b; }
+a { color: var(--cyan); }
+.outputs a { display: block; font-size: 13px; padding: 3px 0; }
+.note { font-size: 12px; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 10px; }
+.note b { color: var(--fg); }
+.err { color: #ffb4b4; border-color: rgba(255,90,90,.4); }
+input, select { background: var(--card2); border: 1px solid var(--line); color: var(--fg); border-radius: 8px; padding: 7px 9px; font: inherit; min-width: 0; }
+.form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; text-align: left; }
+.form label { font-size: 11px; color: var(--muted); font-weight: 600; display: grid; gap: 4px; }
+.form .full { grid-column: 1 / -1; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/strdm-mark-v2.webp" alt=""><div><b>Karta Live</b><small>FL STUDIO × HIGGSFIELD</small></div></div>
+  <span id="flPill" class="pill"><span class="dot"></span><span>FL Studio</span></span>
+  <span id="hfPill" class="pill"><span class="dot"></span><span>Higgsfield</span></span>
+</header>
+
+<main>
+  <section>
+    <div id="monitor" class="monitor">
+      <img id="still" class="still" alt="" hidden>
+      <video id="video" muted playsinline preload="auto" hidden></video>
+      <div id="center" class="center"></div>
+      <div class="overlay"><span id="secTag" class="tag" hidden></span><span id="clock" class="tag mono">0:00.0</span></div>
+    </div>
+
+    <div id="timeline" class="timeline" role="slider" aria-label="Song position" tabindex="0" title="Click a section to jump FL Studio there">
+      <canvas id="wave" class="wave"></canvas>
+      <div id="segs"></div>
+      <div id="dropMark" class="drop-mark" hidden></div>
+      <div id="playhead" class="playhead" style="left:0"></div>
+    </div>
+
+    <div class="transport">
+      <button id="playBtn" class="btn primary" disabled>Play in FL</button>
+      <button id="stopBtn" class="btn" disabled>Stop</button>
+      <button id="dropBtn" class="btn" disabled>Jump to the drop</button>
+      <span id="srcNote" class="muted" style="font-size:12px"></span>
+      <div class="seg-toggle" role="group" aria-label="Aspect">
+        <button id="aWide" aria-pressed="true">16:9 YouTube</button>
+        <button id="aTall" aria-pressed="false">9:16 Shorts</button>
+      </div>
+    </div>
+    <audio id="localAudio" preload="auto" hidden></audio>
+  </section>
+
+  <aside>
+    <div class="panel" id="dropPanel">
+      <div id="dropZone" class="drop">
+        <p class="eyebrow" style="margin:0">New render</p>
+        <p style="margin:6px 0 0">Export from FL into <b id="dropFolder" class="mono" style="font-size:12px;word-break:break-all"></b><br>or drop a WAV here.</p>
+        <div class="form">
+          <label class="full">Title <input id="fTitle" placeholder="Taken from the FL project"></label>
+          <label>Genre <select id="fGenre"><option value="">Auto</option><option>Dancehall</option><option>Reggae</option><option>Afrobeats</option><option>Amapiano</option><option>Drill</option><option>Trap</option><option>Hip Hop</option><option>R&amp;B</option><option>Soca</option></select></label>
+          <label>Style <select id="fPattern"><option value="">Pick for me</option><option value="rings">Rings</option><option value="flow">Flow</option><option value="skyline">Skyline</option></select></label>
+          <label class="full"><input id="fFile" type="file" accept=".wav,.mp3,.flac,.aif,.aiff,.m4a,audio/*"></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="dnaPanel" hidden>
+      <h2>What Karta heard</h2>
+      <dl class="stats" id="stats"></dl>
+      <div class="swatches" id="swatches"></div>
+      <div class="chips" id="mood"></div>
+    </div>
+
+    <div class="panel" id="stagePanel" hidden>
+      <h2>Progress</h2>
+      <ol class="stages" id="stages"></ol>
+      <p id="jobErr" class="note err" hidden></p>
+    </div>
+
+    <div class="panel" id="shotPanel" hidden>
+      <h2>Higgsfield shots</h2>
+      <div id="shots"></div>
+    </div>
+
+    <div class="panel outputs" id="outPanel" hidden>
+      <h2>Files</h2>
+      <div id="outputs"></div>
+    </div>
+
+    <div class="note" id="setupNote" hidden></div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const S = { fl: { connected: false, state: null, installed: false, dir: "" }, setup: {}, job: null, aspect: "wide", local: false, flAt: 0 };
+const STAGES = [["analyzing", "Listening to the beat"], ["designing", "Visual DNA"], ["cover", "Cover art"], ["visualizer", "Visualizer videos"], ["higgsfield", "Higgsfield shots"], ["assembling", "Cutting to the bar"], ["done", "Done"]];
+const fmt = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
+
+/* ---------------- state from the job's events ---------------- */
+function derive() {
+  const ev = S.job?.events ?? [];
+  const d = { features: null, dna: null, art: null, prompts: null, shots: {}, videos: {}, stage: null, done: new Set() };
+  for (const e of ev) {
+    if (e.type === "stage") { if (d.stage) d.done.add(d.stage); d.stage = e.stage; }
+    if (e.type === "features") d.features = e.features;
+    if (e.type === "dna") d.dna = e.dna;
+    if (e.type === "art") d.art = e.art;
+    if (e.type === "prompts") d.prompts = e;
+    if (e.type === "shot") { const k = `${e.index}:${e.aspect}`; d.shots[k] = { ...(d.shots[k] ?? {}), status: e.status, ...(e.file ? { file: e.file } : {}), ...(e.error ? { error: e.error } : {}) }; }
+    if (e.type === "video") d.videos[e.kind] = e.file;
+  }
+  if (S.job?.status === "done") { d.done.add(d.stage); d.stage = "done"; d.done.add("done"); }
+  return d;
+}
+let D = derive();
+
+/* ---------------- the master clock: FL's playhead, or the beat itself when FL isn't open ---------------- */
+function now() {
+  if (S.fl.connected && S.fl.state) {
+    const st = S.fl.state;
+    // FL writes ~20x/s; between writes, move the playhead forward ourselves so video stays smooth
+    const drift = st.playing ? (performance.now() - S.flAt) / 1000 : 0;
+    return { t: st.posMs / 1000 + drift, playing: st.playing, source: "fl" };
+  }
+  const a = $("localAudio");
+  return { t: a.currentTime || 0, playing: !a.paused, source: "local" };
+}
+const duration = () => D.features?.duration || (S.fl.state?.songMs ? S.fl.state.songMs / 1000 : 0);
+
+/* ---------------- rendering ---------------- */
+function renderPills() {
+  const fp = $("flPill");
+  fp.className = "pill " + (S.fl.connected ? (S.fl.state?.playing ? "live" : "on") : "warn");
+  const st = S.fl.state;
+  fp.lastElementChild.textContent = S.fl.connected ? `FL Studio · ${st.tempo.toFixed(st.tempo % 1 ? 2 : 0)} BPM${st.playing ? " · playing" : ""}` : (S.fl.installed ? "FL Studio not open" : "FL Studio script not installed");
+  const hp = $("hfPill");
+  const ready = S.setup.higgsfield && S.setup.karta;
+  hp.className = "pill " + (ready ? "on" : "warn");
+  hp.lastElementChild.textContent = ready ? "Higgsfield ready" : "Higgsfield keys not set";
+  $("dropFolder").textContent = S.setup.dropFolder ?? "";
+  const notes = [];
+  if (!S.fl.connected) notes.push(S.fl.installed
+    ? "<b>Open FL Studio</b> with the Karta Live script on (Options › MIDI settings › Controller type: Karta Live). Until then the preview plays the beat itself."
+    : "<b>Install the FL script:</b> run <span class='mono'>karta-live install</span>, then in FL Studio pick Controller type “Karta Live” under Options › MIDI settings.");
+  if (!ready) notes.push("<b>Add Higgsfield:</b> run <span class='mono'>karta-live login</span> with your Karta producer account and Higgsfield API keys. Without them you still get the cover, DNA and visualizer.");
+  $("setupNote").hidden = !notes.length;
+  $("setupNote").innerHTML = notes.join("<br><br>");
+  const fl = S.fl.connected;
+  $("playBtn").textContent = fl ? (st?.playing ? "Pause FL" : "Play in FL") : (now().playing ? "Pause" : "Play");
+  $("playBtn").disabled = !fl && !S.job;
+  $("stopBtn").disabled = !fl && !S.job;
+  $("dropBtn").disabled = !D.features;
+  $("srcNote").textContent = fl ? "Synced to FL Studio’s playhead" : S.job ? "FL Studio isn’t connected: playing the rendered beat" : "";
+}
+
+function renderSide() {
+  const f = D.features, dna = D.dna;
+  $("dnaPanel").hidden = !f;
+  if (f) {
+    $("stats").innerHTML = [["BPM", Math.round(f.bpm)], ["Key", f.key.label], ["Energy", Math.round(f.energy * 100) + "%"], ["Drop", fmt(f.drop)]].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+  }
+  if (dna) {
+    $("swatches").innerHTML = ["bg", "deep", "primary", "secondary", "accent", "light"].map((k) => `<i title="${k}" style="background:${dna.palette[k]}"></i>`).join("");
+    $("mood").innerHTML = [...dna.mood, dna.pattern + " pattern", dna.motion.pace + " motion"].map((m) => `<span>${m}</span>`).join("");
+  }
+  $("stagePanel").hidden = !S.job;
+  const hasHf = S.setup.higgsfield && S.setup.karta;
+  $("stages").innerHTML = STAGES.filter(([k]) => hasHf || !["higgsfield", "assembling"].includes(k)).map(([k, label]) => `<li class="${D.done.has(k) ? "done" : D.stage === k && S.job?.status === "running" ? "now" : ""}">${label}</li>`).join("");
+  $("jobErr").hidden = S.job?.status !== "failed";
+  $("jobErr").textContent = S.job?.error ?? "";
+
+  const shots = D.prompts?.shots ?? [];
+  $("shotPanel").hidden = !shots.length;
+  $("shots").innerHTML = shots.map((s, i) => {
+    const w = D.shots[`${i}:16:9`]?.status ?? (hasHf ? "waiting" : "needs keys"), t = D.shots[`${i}:9:16`]?.status ?? (hasHf ? "waiting" : "needs keys");
+    const label = (x) => ({ queued: "queued", in_progress: "rendering", completed: "downloading", downloaded: "ready", failed: "failed", nsfw: "blocked", canceled: "canceled" }[x] ?? x);
+    return `<div class="shot" data-i="${i}"><header><b>${s.section}</b><span class="muted mono" style="font-size:12px">${fmt(s.start)} · ${s.duration}s</span>
+      <span style="margin-left:auto;display:flex;gap:4px"><span class="st-pill ${w}">16:9 ${label(w)}</span><span class="st-pill ${t}">9:16 ${label(t)}</span></span></header>
+      <p title="Click to expand">${s.prompt.replace(/</g, "&lt;")}</p></div>`;
+  }).join("");
+
+  const out = [];
+  if (D.art) out.push(["Cover (3000×3000)", D.art.cover], ["YouTube thumbnail", D.art.thumbnail]);
+  for (const [k, l] of [["wide", "YouTube visualizer"], ["tall", "9:16 short"], ["cinematicWide", "Cinematic YouTube video"], ["cinematicTall", "Cinematic short"]]) if (D.videos[k]) out.push([l, D.videos[k]]);
+  $("outPanel").hidden = !out.length;
+  $("outputs").innerHTML = out.map(([l, u]) => `<a href="${u}" target="_blank" rel="noreferrer">${l}</a>`).join("");
+  if (S.job && S.job.audio && $("localAudio").dataset.src !== S.job.audio) { $("localAudio").src = S.job.audio; $("localAudio").dataset.src = S.job.audio; }
+}
+
+function renderTimeline() {
+  const dur = duration();
+  const shots = D.prompts?.shots ?? [];
+  const sections = D.features?.sections ?? [];
+  const items = shots.length ? shots.map((s, i) => ({ label: s.section, start: s.start, end: (shots[i + 1]?.start ?? dur), i })) : sections.map((s) => ({ label: s.label, start: s.start, end: s.end, i: -1 }));
+  const energy = (t) => { const c = D.features?.energyCurve; if (!c) return .5; return c[Math.min(c.length - 1, Math.floor((t / dur) * c.length))] ?? .5; };
+  $("segs").innerHTML = dur ? items.map((s) => {
+    const st = s.i >= 0 ? (D.shots[`${s.i}:${S.aspect === "wide" ? "16:9" : "9:16"}`]?.status ?? "") : "";
+    const e = energy((s.start + s.end) / 2);
+    return `<div class="seg" data-t="${s.start}" style="left:${(s.start / dur) * 100}%;width:${((s.end - s.start) / dur) * 100}%;background:linear-gradient(180deg, rgba(255,61,138,${.12 + e * .45}), rgba(0,225,255,${.05 + e * .2}))"><b>${s.label}</b><span class="mono">${fmt(s.start)}</span><i class="st ${st}"></i></div>`;
+  }).join("") : "";
+  const dm = $("dropMark");
+  dm.hidden = !D.features;
+  if (D.features && dur) dm.style.left = `${(D.features.drop / dur) * 100}%`;
+  drawWave();
+}
+
+function drawWave() {
+  const c = $("wave"), curve = D.features?.energyCurve;
+  const r = c.getBoundingClientRect();
+  c.width = Math.max(1, r.width * devicePixelRatio); c.height = Math.max(1, r.height * devicePixelRatio);
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  if (!curve) return;
+  g.fillStyle = "rgba(255,255,255,.8)";
+  const w = c.width / curve.length;
+  curve.forEach((v, i) => { const h = Math.max(1, v * c.height); g.fillRect(i * w + 1, c.height - h, Math.max(1, w - 2), h); });
+}
+
+/* ---------------- the monitor: pick what should be on screen right now ---------------- */
+let shown = "";
+function monitor() {
+  const { t, playing } = now();
+  const dur = duration();
+  $("clock").textContent = fmt(Math.max(0, t)) + (dur ? " / " + fmt(dur) : "");
+  $("playhead").style.left = dur ? `${Math.min(100, (t / dur) * 100)}%` : "0";
+  const mon = $("monitor"), video = $("video"), still = $("still"), center = $("center");
+  mon.classList.toggle("tall", S.aspect === "tall");
+
+  if (!S.job) {
+    still.hidden = true; video.hidden = true; $("secTag").hidden = true;
+    center.innerHTML = `<div><p class="eyebrow">Karta Live</p><p class="display" style="font-size:22px;margin:.3em 0">Export your beat to see it come alive</p><p class="muted">Render a WAV from FL Studio into the Drop folder, or drop one on the right.</p></div>`;
+    return;
+  }
+  if (dur && t > dur + 0.5) {
+    video.hidden = true; if (!video.paused) video.pause();
+    const cover = D.art?.coverClean ?? D.art?.cover; still.hidden = !cover; if (cover && still.getAttribute("src") !== cover) still.src = cover; still.classList.add("wait");
+    $("secTag").hidden = true;
+    center.innerHTML = `<div><p class="display" style="font-size:16px;margin:0">Past the end of the beat</p><p class="muted" style="margin:.3em 0 0">FL Studio’s playhead is after the exported audio. Jump back to bar 1 or the drop.</p></div>`;
+    return;
+  }
+  const shots = D.prompts?.shots ?? [];
+  let idx = -1;
+  for (let i = 0; i < shots.length; i++) if (t + 0.001 >= shots[i].start) idx = i;
+  const aspect = S.aspect === "wide" ? "16:9" : "9:16";
+  const shot = idx >= 0 ? shots[idx] : null;
+  const clip = shot ? D.shots[`${idx}:${aspect}`] : null;
+  const vis = S.aspect === "wide" ? D.videos.wide : D.videos.tall;
+  const tag = $("secTag");
+  tag.hidden = !shot;
+  if (shot) tag.innerHTML = `<span class="display">${shot.section}</span> <span class="muted">· shot ${idx + 1} of ${shots.length}</span>`;
+
+  let want = "", offset = 0;
+  if (clip?.file) { want = clip.file; offset = (t - shot.start) % Math.max(0.5, shot.duration); }
+  else if (vis && !(S.setup.higgsfield && S.setup.karta)) {
+    // no Higgsfield: the visualizer stands in (full beat for 16:9; the short starts at the drop)
+    want = vis; offset = S.aspect === "wide" ? t : Math.max(0, t - (D.features?.drop ?? 0));
+  }
+  if (want) {
+    center.innerHTML = ""; still.hidden = true; video.hidden = false;
+    if (shown !== want) { shown = want; video.src = want; video.load(); }
+    if (video.readyState >= 1 && Math.abs(video.currentTime - offset) > 0.25 && offset < (video.duration || Infinity)) video.currentTime = offset;
+    if (playing && video.paused) video.play().catch(() => {});
+    if (!playing && !video.paused) video.pause();
+    return;
+  }
+  // nothing playable for this moment yet: show the cover, blurred while Higgsfield works
+  video.hidden = true; if (!video.paused) video.pause();
+  const cover = D.art?.coverClean ?? D.art?.cover;
+  still.hidden = !cover;
+  if (cover && still.getAttribute("src") !== cover) still.src = cover;
+  const working = S.job.status === "running";
+  still.classList.toggle("wait", working && !!shot);
+  const status = clip?.status;
+  center.innerHTML = !cover ? `<div><div class="spinner"></div><p>${D.stage === "analyzing" ? "Listening to the beat…" : "Designing the visuals…"}</p></div>`
+    : working && shot ? `<div><div class="spinner"></div><p class="display" style="font-size:16px;margin:0">${shot.section} shot</p><p class="muted" style="margin:.3em 0 0">${status === "in_progress" ? "Higgsfield is rendering this shot" : status === "queued" ? "Queued at Higgsfield" : status === "completed" ? "Downloading the clip" : "Waiting its turn"}</p></div>` : "";
+}
+
+/* ---------------- events from Karta Live ---------------- */
+const es = new EventSource("/events");
+es.addEventListener("hello", (m) => { Object.assign(S, JSON.parse(m.data)); S.flAt = performance.now(); D = derive(); all(); });
+es.addEventListener("fl", (m) => { const d = JSON.parse(m.data); S.fl.connected = d.connected; S.fl.state = d.state; S.flAt = performance.now(); renderPills(); });
+es.addEventListener("job", (m) => { S.job = JSON.parse(m.data); D = derive(); all(); });
+es.addEventListener("engine", (m) => { if (!S.job) return; S.job.events.push(JSON.parse(m.data)); D = derive(); renderSide(); renderTimeline(); renderPills(); });
+function all() { renderPills(); renderSide(); renderTimeline(); }
+(function loop() { monitor(); requestAnimationFrame(loop); })();
+addEventListener("resize", drawWave);
+
+/* ---------------- controls ---------------- */
+async function fl(cmd) {
+  const r = await fetch("/fl", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cmd) });
+  if (!r.ok) alertBox((await r.json()).error);
+}
+function seek(t) {
+  if (S.fl.connected) { fl({ type: "seek", ms: Math.round(t * 1000) }); S.fl.state.posMs = t * 1000; S.flAt = performance.now(); }
+  else $("localAudio").currentTime = t;
+}
+$("timeline").addEventListener("click", (e) => {
+  const seg = e.target.closest(".seg"); const dur = duration(); if (!dur) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  seek(seg && !e.shiftKey ? Number(seg.dataset.t) : ((e.clientX - r.left) / r.width) * dur);
+});
+$("timeline").addEventListener("keydown", (e) => { const { t } = now(); if (e.key === "ArrowRight") seek(t + 5); if (e.key === "ArrowLeft") seek(Math.max(0, t - 5)); });
+$("playBtn").onclick = () => { if (S.fl.connected) fl({ type: "toggle" }); else { const a = $("localAudio"); a.paused ? a.play() : a.pause(); setTimeout(renderPills, 50); } };
+$("stopBtn").onclick = () => { if (S.fl.connected) { fl({ type: "stop" }); } else { const a = $("localAudio"); a.pause(); a.currentTime = 0; renderPills(); } };
+$("dropBtn").onclick = () => D.features && seek(D.features.drop);
+$("aWide").onclick = () => { S.aspect = "wide"; $("aWide").setAttribute("aria-pressed", "true"); $("aTall").setAttribute("aria-pressed", "false"); shown = ""; renderTimeline(); };
+$("aTall").onclick = () => { S.aspect = "tall"; $("aTall").setAttribute("aria-pressed", "true"); $("aWide").setAttribute("aria-pressed", "false"); shown = ""; renderTimeline(); };
+$("shots").addEventListener("click", (e) => { const s = e.target.closest(".shot"); if (!s) return; if (e.target.tagName === "P") s.classList.toggle("open"); else seek(D.prompts.shots[Number(s.dataset.i)].start); });
+
+function alertBox(msg) { const n = $("jobErr"); $("stagePanel").hidden = false; n.hidden = false; n.textContent = msg; }
+async function upload(file) {
+  const headers = { "X-Filename": encodeURIComponent(file.name), "X-Title": encodeURIComponent($("fTitle").value || (S.fl.state?.title ?? "").replace(/\s*-\s*FL Studio.*$/i, "") || file.name.replace(/\.[^.]+$/, "")), "X-Genre": encodeURIComponent($("fGenre").value), "X-Pattern": $("fPattern").value };
+  if (S.fl.connected && S.fl.state?.tempo) headers["X-Bpm"] = String(Math.round(S.fl.state.tempo));
+  const r = await fetch("/render", { method: "POST", headers, body: file });
+  if (!r.ok) alertBox((await r.json()).error);
+}
+$("fFile").onchange = (e) => { const f = e.target.files[0]; if (f) upload(f); e.target.value = ""; };
+const dz = $("dropZone");
+["dragenter", "dragover"].forEach((t) => addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => addEventListener(t, (e) => { e.preventDefault(); if (t === "drop" || e.target === document.documentElement) dz.classList.remove("over"); }));
+addEventListener("drop", (e) => { const f = e.dataTransfer?.files?.[0]; if (f) upload(f); });
+$("localAudio").addEventListener("play", renderPills); $("localAudio").addEventListener("pause", renderPills);
+</script>
+</body>
+</html>
