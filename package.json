@@ -1,0 +1,11 @@
+{
+  "name": "karta",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "build": "npm run build -w @karta/art-engine",
+    "test": "npm test -w @karta/art-engine",
+    "art": "npm run art -w @karta/art-engine --"
+  }
+}
