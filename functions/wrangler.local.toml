@@ -1,0 +1,22 @@
+# Local development only (`npm run dev`). In production Rork deploys this folder like STRDM's
+# functions and provides the single `DO` router; here the two classes are bound directly.
+name = "karta-functions"
+main = "index.ts"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
+
+[[durable_objects.bindings]]
+name = "KARTA_DB"
+class_name = "KartaDB"
+
+[[durable_objects.bindings]]
+name = "MEDIA"
+class_name = "MediaStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["KartaDB", "MediaStore"]
+
+[vars]
+WEB_URL = "http://localhost:5173"
+PLATFORM_FEE_BPS = "1000"

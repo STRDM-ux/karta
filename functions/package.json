@@ -1,11 +1,10 @@
 {
-  "name": "@karta/api",
+  "name": "karta-functions",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local --port 8787",
-    "deploy": "wrangler deploy",
+    "dev": "wrangler dev -c wrangler.local.toml --local --port 8787",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs"
   },

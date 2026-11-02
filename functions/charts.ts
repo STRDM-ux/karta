@@ -2,7 +2,7 @@
 // The chart as kworb.net shows it (position, movement, artist, title), with cover art and an
 // Apple Music link added from Apple's own most-played feed. Cached at the edge for 20 minutes.
 
-import { json } from './util';
+import { json } from './lib/util';
 
 const CACHE_SECONDS = 20 * 60;
 export const COUNTRIES: Record<string, string> = { jm: 'Jamaica', us: 'United States', gb: 'United Kingdom', ca: 'Canada', tt: 'Trinidad and Tobago', ng: 'Nigeria' };

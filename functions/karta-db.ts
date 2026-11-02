@@ -1,13 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
-import { ApiError, cents, cleanHandle, multiline, randomToken, sha256Hex, text, uid } from './util';
-import { DEFAULT_PRICES, LICENSES, LICENSE_IDS, type FileKind, type LicenseId } from './licenses';
-import { stripe } from './stripe';
+import { ApiError, cents, cleanHandle, multiline, randomToken, sha256Hex, text, uid } from './lib/util';
+import { DEFAULT_PRICES, LICENSES, LICENSE_IDS, type FileKind, type LicenseId } from './lib/licenses';
+import { stripe } from './lib/stripe';
+import { isInternal } from './lib/do';
 
 export interface Env {
-  DB: DurableObjectNamespace<KartaDB>;
-  FILES: R2Bucket;
-  WEB_URL: string;
-  PLATFORM_FEE_BPS: string;
+  WEB_URL?: string;
+  PLATFORM_FEE_BPS?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   RENDER_URL?: string;
@@ -73,6 +72,15 @@ export class KartaDB extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     for (const stmt of SCHEMA.split(';').map((s) => s.trim()).filter(Boolean)) this.sql.exec(stmt);
   }
+
+  /** The worker reaches this object over Rork's DO router: POST /op { op, token, args }. */
+  async fetch(req: Request): Promise<Response> {
+    if (!isInternal(req) || req.method !== 'POST') return new Response('Forbidden', { status: 403 });
+    const { op, token, args } = (await req.json()) as { op: string; token: string | null; args: Args };
+    return Response.json(await this.api(op, token, args ?? {}));
+  }
+
+  private get web(): string { return (this.env.WEB_URL ?? 'https://karta.strdm.io').replace(/\/$/, ''); }
 
   /** Single entry point, like strdm-live's platform ops: the worker routes, the object decides. */
   async api(op: string, token: string | null, args: Args): Promise<{ ok: true; data: unknown } | { ok: false; status: number; error: string }> {
@@ -172,6 +180,7 @@ export class KartaDB extends DurableObject<Env> {
   async op_login(_: Viewer, a: Args) {
     const email = text(a.email, 200).toLowerCase();
     const u = this.one('SELECT * FROM users WHERE email = ?', email);
+    if (u?.pass_hash === '!strdm') throw new ApiError(401, 'This account signs in with STRDM. Use “Continue with STRDM”.');
     if (!u || (await this.hashPassword(String(a.password ?? ''), String(u.salt))) !== u.pass_hash) throw new ApiError(401, 'That email and password don’t match.');
     const v = { id: String(u.id), role: u.role as Role, email };
     return { token: await this.newSession(v.id), me: this.op_me(v) };
@@ -235,7 +244,7 @@ export class KartaDB extends DurableObject<Env> {
   async op_changePassword(v: Viewer, a: Args) {
     const me = this.need(v);
     const u = this.one('SELECT * FROM users WHERE id = ?', me.id)!;
-    if ((await this.hashPassword(String(a.current ?? ''), String(u.salt))) !== u.pass_hash) throw new ApiError(400, 'Your current password is wrong.');
+    if (u.pass_hash !== '!strdm' && (await this.hashPassword(String(a.current ?? ''), String(u.salt))) !== u.pass_hash) throw new ApiError(400, 'Your current password is wrong.');
     const next = String(a.next ?? '');
     if (next.length < 8) throw new ApiError(400, 'Use a password of at least 8 characters.');
     const salt = randomToken(16);
@@ -437,7 +446,12 @@ export class KartaDB extends DurableObject<Env> {
   op_mediaKey(v: Viewer, a: Args) {
     // public media: previews, covers and generated art of non-draft beats; profile images
     const kind = text(a.kind, 20);
-    if (a.scope === 'profiles') return { key: `profiles/${text(a.id, 40)}/${kind === 'banner' ? 'banner' : 'avatar'}` };
+    if (a.scope === 'profiles') {
+      const col = kind === 'banner' ? 'banner' : 'avatar';
+      const p = this.one(`SELECT ${col} AS v FROM profiles WHERE user_id = ?`, text(a.id, 40));
+      if (!p?.v) throw new ApiError(404, 'Not found');
+      return { key: `profiles/${text(a.id, 40)}/${col}` };
+    }
     const b = this.one('SELECT producer_id, status, files, art FROM beats WHERE id = ?', text(a.id, 40));
     if (!b) throw new ApiError(404, 'Not found');
     if (b.status === 'draft' && v?.id !== b.producer_id) throw new ApiError(404, 'Not found');
@@ -511,7 +525,7 @@ export class KartaDB extends DurableObject<Env> {
       this.sql.exec('UPDATE profiles SET stripe_account = ? WHERE user_id = ?', acct, me.id);
     }
     const link = await stripe<{ url: string }>(this.env.STRIPE_SECRET_KEY, 'POST', '/v1/account_links', {
-      account: acct, type: 'account_onboarding', refresh_url: `${this.env.WEB_URL}/settings?tab=payouts`, return_url: `${this.env.WEB_URL}/settings?tab=payouts&done=1`,
+      account: acct, type: 'account_onboarding', refresh_url: `${this.web}/settings?tab=payouts`, return_url: `${this.web}/settings?tab=payouts&done=1`,
     });
     return { url: link.url };
   }
@@ -546,7 +560,7 @@ export class KartaDB extends DurableObject<Env> {
     if (this.one("SELECT 1 FROM orders WHERE buyer_id = ? AND beat_id = ? AND license = ? AND status = 'paid'", me.id, String(b.id), license)) throw new ApiError(400, 'You already own this license. Find it in your Library.');
     const prod = this.one('SELECT stripe_account, payouts_ready, name FROM profiles WHERE user_id = ?', String(b.producer_id))!;
     if (!prod.stripe_account || !prod.payouts_ready) throw new ApiError(400, `${prod.name} hasn’t finished setting up payouts, so this beat can’t be bought yet.`);
-    const fee = Math.round((offer.price * Number(this.env.PLATFORM_FEE_BPS || '1000')) / 10_000);
+    const fee = Math.round((offer.price * Number(this.env.PLATFORM_FEE_BPS ?? '1000')) / 10_000);
     const orderId = uid('o_');
     const session = await stripe<{ id: string; url: string }>(this.env.STRIPE_SECRET_KEY, 'POST', '/v1/checkout/sessions', {
       mode: 'payment', customer_email: me.email, client_reference_id: orderId,
@@ -556,7 +570,7 @@ export class KartaDB extends DurableObject<Env> {
       'payment_intent_data[application_fee_amount]': fee,
       'payment_intent_data[transfer_data][destination]': String(prod.stripe_account),
       'metadata[order_id]': orderId,
-      success_url: `${this.env.WEB_URL}/library?paid=${orderId}`, cancel_url: `${this.env.WEB_URL}/beat/${b.id}`,
+      success_url: `${this.web}/library?paid=${orderId}`, cancel_url: `${this.web}/beat/${b.id}`,
     });
     this.sql.exec(
       "INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
@@ -689,6 +703,33 @@ export class KartaDB extends DurableObject<Env> {
     return { people: this.all('SELECT user_id FROM profiles WHERE handle LIKE ? OR LOWER(name) LIKE ? LIMIT 10', `${q}%`, `%${q}%`).map((r) => this.profileCard(String(r.user_id))) };
   }
 
+  /** Continue with STRDM: the worker has already checked the password with STRDM's backend. */
+  async op_strdmLogin(_: Viewer, a: Args) {
+    const email = text(a.email, 200).toLowerCase();
+    if (!email) throw new ApiError(401, 'STRDM didn’t return an email for that account.');
+    const u = this.one('SELECT * FROM users WHERE email = ?', email);
+    if (u) {
+      const v = { id: String(u.id), role: u.role as Role, email };
+      return { token: await this.newSession(v.id), me: this.op_me(v) };
+    }
+    // first time on Karta: pick producer or buyer, and a handle
+    const name = text(a.name, 60) || email.split('@')[0];
+    if (!a.handle) {
+      const suggest = name.toLowerCase().replace(/[^a-z0-9_.]+/g, '').slice(0, 24) || 'artist';
+      let handle = suggest.length >= 3 ? suggest : `${suggest}${Math.floor(Math.random() * 900 + 100)}`;
+      for (let i = 0; this.one('SELECT 1 FROM profiles WHERE handle = ?', handle) && i < 20; i++) handle = `${suggest}${Math.floor(Math.random() * 9000 + 1000)}`;
+      return { needsProfile: true, name, suggestedHandle: handle };
+    }
+    const handle = cleanHandle(a.handle);
+    if (this.one('SELECT 1 FROM profiles WHERE handle = ?', handle)) throw new ApiError(409, `@${handle} is taken.`);
+    const role: Role = a.role === 'producer' ? 'producer' : 'buyer';
+    const id = uid('u_'), now = Date.now();
+    // no Karta password: this account signs in through STRDM (a password can be added in Settings later)
+    this.sql.exec("INSERT INTO users (id, email, pass_hash, salt, role, created_at) VALUES (?, ?, '!strdm', '', ?, ?)", id, email, role, now);
+    this.sql.exec('INSERT INTO profiles (user_id, handle, name, settings, updated_at) VALUES (?, ?, ?, ?, ?)', id, handle, name, JSON.stringify(DEFAULT_SETTINGS), now);
+    return { token: await this.newSession(id), me: this.op_me({ id, role, email }) };
+  }
+
   /* ---------------- art jobs (render server) ---------------- */
   op_startArt(v: Viewer, a: Args) {
     const me = this.need(v, 'producer');
@@ -727,9 +768,26 @@ export class KartaDB extends DurableObject<Env> {
     return { ok: true };
   }
 
-  op_artJob(_: Viewer, a: Args) {
+  private job(a: Args): Row {
     const j = this.one('SELECT * FROM art_jobs WHERE id = ?', text(a.jobId, 40));
-    return j ? { beatId: j.beat_id, status: j.status } : null;
+    if (!j || j.status === 'done' || j.status === 'failed') throw new ApiError(404, 'Unknown job');
+    return j;
+  }
+
+  op_jobAudio(_: Viewer, a: Args) {
+    const j = this.job(a);
+    const files = JSON.parse(String(this.one('SELECT files FROM beats WHERE id = ?', String(j.beat_id))?.files ?? '{}'));
+    const key = files.wav ?? files.mp3 ?? files.preview;
+    if (!key) throw new ApiError(404, 'No audio');
+    this.sql.exec("UPDATE art_jobs SET status = 'rendering', updated_at = ? WHERE id = ?", Date.now(), String(j.id));
+    return { key };
+  }
+
+  op_jobFileKey(_: Viewer, a: Args) {
+    const j = this.job(a);
+    const kind = text(a.kind, 20);
+    if (!['cover', 'thumbnail', 'youtube', 'short', 'cinematic', 'shortCinematic'].includes(kind)) throw new ApiError(400, 'Unknown art kind');
+    return { key: `beats/${j.beat_id}/art-${kind}` };
   }
 
   /** Test-mode only (no STRIPE_SECRET_KEY): lets local dev mark payouts ready. */
@@ -750,7 +808,7 @@ export class KartaDB extends DurableObject<Env> {
     const offer = (this.withPrices(this.beatOut(b, me), String(b.producer_id)).offers as { id: string; price: number }[]).find((o) => o.id === license);
     if (!offer) throw new ApiError(400, 'That license isn’t offered for this beat.');
     const orderId = uid('o_');
-    const fee = Math.round((offer.price * Number(this.env.PLATFORM_FEE_BPS || '1000')) / 10_000);
+    const fee = Math.round((offer.price * Number(this.env.PLATFORM_FEE_BPS ?? '1000')) / 10_000);
     this.sql.exec("INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
       orderId, me.id, me.email, String(b.id), String(b.producer_id), license, offer.price, fee, Date.now());
     return { orderId };

@@ -2,10 +2,16 @@
   "name": "karta",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "functions",
+    "web"
+  ],
   "scripts": {
-    "build": "npm run build -w @karta/art-engine",
-    "test": "npm test -w @karta/art-engine",
-    "art": "npm run art -w @karta/art-engine --"
+    "build": "npm run build -w @karta/art-engine && npm run build -w @karta/web",
+    "test": "npm test -w @karta/art-engine && npm test -w karta-functions",
+    "art": "npm run art -w @karta/art-engine --",
+    "dev:api": "npm run dev -w karta-functions",
+    "dev:web": "npm run dev -w @karta/web"
   }
 }

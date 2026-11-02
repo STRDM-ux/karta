@@ -1,0 +1,7 @@
+{
+  "$schema": "https://rork.com/schema/rork.json",
+  "apps": [
+    { "name": "Karta", "path": "web", "framework": "web", "settings": { "webSlug": "karta" } },
+    { "name": "Functions", "path": "functions", "framework": "cloudflare" }
+  ]
+}
