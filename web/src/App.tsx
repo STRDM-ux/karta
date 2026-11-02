@@ -16,6 +16,7 @@ const Library = lazy(() => import("@/pages/Library"));
 const Studio = lazy(() => import("@/pages/Studio"));
 const BeatEditor = lazy(() => import("@/pages/BeatEditor"));
 const Settings = lazy(() => import("@/pages/Settings"));
+const Ads = lazy(() => import("@/pages/Ads"));
 const Auth = lazy(() => import("@/pages/Auth"));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } } });
@@ -52,6 +53,7 @@ export default function App() {
                         <Route path="/library" element={<Need><Library /></Need>} />
                         <Route path="/studio" element={<Need role="producer"><Studio /></Need>} />
                         <Route path="/studio/beats/:id" element={<Need role="producer"><BeatEditor /></Need>} />
+                        <Route path="/studio/ads" element={<Need role="producer"><Ads /></Need>} />
                         <Route path="/settings" element={<Need><Settings /></Need>} />
                         <Route path="*" element={<div className="panel p-8 text-center"><h1 className="display text-2xl">Page not found</h1><p className="mt-2 text-sm text-muted-foreground">That link doesn’t go anywhere.</p></div>} />
                       </Routes>

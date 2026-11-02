@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, Circle, ExternalLink, Loader2, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Circle, ExternalLink, Loader2, Megaphone, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, mediaUrl, upload } from "@/lib/api";
@@ -91,6 +91,7 @@ export default function BeatEditor() {
         </div>
         <div className="flex flex-wrap gap-2">
           {beat.status === "live" && <Link to={`/beat/${beat.id}`} className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-border px-4 text-sm font-semibold">View in store <ExternalLink className="h-3.5 w-3.5" /></Link>}
+          {beat.status === "live" && <Link to={`/studio/ads?promote=${beat.id}`} className="inline-flex h-11 items-center gap-1.5 rounded-xl border border-[hsl(var(--pink)/0.6)] px-4 text-sm font-semibold"><Megaphone className="h-3.5 w-3.5 text-[hsl(var(--pink))]" /> Promote</Link>}
           {!sold && <button onClick={() => save.mutate()} disabled={save.isPending} className="h-11 rounded-xl border border-border px-4 text-sm font-semibold">{save.isPending ? "Saving…" : "Save"}</button>}
           {!sold && (beat.status === "live"
             ? <button onClick={() => publish.mutate(false)} disabled={publish.isPending} className="h-11 rounded-xl border border-border px-4 text-sm font-semibold">Unpublish</button>

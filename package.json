@@ -10,10 +10,11 @@
   ],
   "scripts": {
     "build": "npm run build -w @karta/art-engine && npm run build -w @karta/web",
-    "test": "npm test -w @karta/art-engine && npm test -w karta-functions && npm test -w @karta/live",
+    "test": "npm test -w @karta/art-engine && npm test -w @karta/ads && npm test -w karta-functions && npm test -w @karta/live",
     "art": "npm run art -w @karta/art-engine --",
     "dev:api": "npm run dev -w karta-functions",
     "dev:web": "npm run dev -w @karta/web",
-    "live": "npm start -w @karta/live"
+    "live": "npm start -w @karta/live",
+    "sync-ads": "node scripts/sync-ads.mjs"
   }
 }

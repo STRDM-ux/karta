@@ -165,8 +165,10 @@ test('buyer profile hides purchases unless they choose to show them', async () =
 });
 
 test('art job needs the renderer; internal routes need the render secret', async () => {
-  const a = await req('POST', `/studio/beats/${s.beat}/art`, { token: s.prod, body: {} });
-  assert.ok([400, 503].includes(a.status), JSON.stringify(a.data));
+  const empty = (await req('POST', '/studio/beats', { token: s.prod, body: { title: 'No audio yet' } })).data.data;
+  const a = await req('POST', `/studio/beats/${empty.id}/art`, { token: s.prod, body: {} });
+  assert.equal(a.status, 400);
+  assert.match(a.data.error, /Upload the beat audio first/);
   const i = await req('POST', '/internal/jobs/j_x', { body: {} });
   assert.equal(i.status, 401);
 });

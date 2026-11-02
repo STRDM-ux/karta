@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Library, LogIn, LogOut, Search, Settings, ShoppingBag, SlidersHorizontal, Star, User } from "lucide-react";
+import { Library, LogIn, LogOut, Megaphone, Search, Settings, ShoppingBag, SlidersHorizontal, Star, User } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { Logo } from "@/components/Logo";
@@ -17,7 +17,7 @@ function navFor(role: string | undefined, handle?: string): Item[] {
     { label: "Feed", path: "/feed", icon: Star },
     { label: "Store", path: "/store", icon: ShoppingBag, also: ["/beat/"] },
   ];
-  if (role === "producer") base.push({ label: "Studio", path: "/studio", icon: SlidersHorizontal });
+  if (role === "producer") base.push({ label: "Studio", path: "/studio", icon: SlidersHorizontal }, { label: "Ads", path: "/studio/ads", icon: Megaphone });
   if (role) base.push({ label: "Library", path: "/library", icon: Library });
   if (handle) base.push({ label: "Profile", path: `/u/${handle}`, icon: User });
   if (role) base.push({ label: "Settings", path: "/settings", icon: Settings });
@@ -37,7 +37,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const nav = useNavigate();
   const loc = useLocation();
   const items = navFor(me?.role, me?.handle);
-  const active = (i: Item) => loc.pathname === i.path || loc.pathname.startsWith(i.path + "/") || !!i.also?.some((p) => loc.pathname.startsWith(p));
+  // the most specific item wins, so /studio/ads lights up Ads and not Studio
+  const active = (i: Item) => {
+    const hit = (x: Item) => loc.pathname === x.path || loc.pathname.startsWith(x.path + "/") || !!x.also?.some((p) => loc.pathname.startsWith(p));
+    return hit(i) && !items.some((o) => o !== i && o.path.length > i.path.length && o.path.startsWith(i.path) && hit(o));
+  };
 
   return (
     <div className="relative min-h-screen bg-background">

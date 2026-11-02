@@ -3,8 +3,9 @@ import { ApiError, cents, cleanHandle, multiline, randomToken, sha256Hex, text, 
 import { DEFAULT_PRICES, LICENSES, LICENSE_IDS, type FileKind, type LicenseId } from './lib/licenses';
 import { stripe } from './lib/stripe';
 import { isInternal } from './lib/do';
+import * as ads from './ads';
 
-export interface Env {
+export interface Env extends ads.AdsEnv {
   WEB_URL?: string;
   PLATFORM_FEE_BPS?: string;
   STRIPE_SECRET_KEY?: string;
@@ -70,7 +71,37 @@ export class KartaDB extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
-    for (const stmt of SCHEMA.split(';').map((s) => s.trim()).filter(Boolean)) this.sql.exec(stmt);
+    for (const stmt of (SCHEMA + ads.ADS_SCHEMA).split(';').map((s) => s.trim()).filter(Boolean)) this.sql.exec(stmt);
+    // migration: which ad click (if any) led to an order
+    if (!this.sql.exec("SELECT 1 FROM pragma_table_info('orders') WHERE name = 'attribution'").toArray().length) {
+      this.sql.exec("ALTER TABLE orders ADD COLUMN attribution TEXT NOT NULL DEFAULT '{}'");
+    }
+  }
+
+  /** Every 6 hours: the ads optimizer looks at each live campaign. */
+  async alarm(): Promise<void> {
+    const live = this.all("SELECT c.id, c.beat_id FROM ad_campaigns c WHERE c.status = 'active'");
+    for (const c of live) {
+      try { await ads.runCampaign(this.env, this.sql, String(c.id), this.avgOrder(String(c.beat_id))); }
+      catch (e) { console.error('[ads] run failed', c.id, e); }
+    }
+    if (live.length) await this.ctx.storage.setAlarm(Date.now() + ads.RUN_EVERY);
+  }
+
+  private avgOrder(beatId: string): number {
+    const b = this.one('SELECT * FROM beats WHERE id = ?', beatId);
+    if (!b) return 2999;
+    return Number((this.withPrices(this.beatOut(b, null), String(b.producer_id)) as { from?: number }).from) || 2999;
+  }
+
+  /** Only accept attribution that points at a real ad arm for this beat. */
+  private attribution(a: Args, beatId: string, req: Args): string {
+    const at = (a.attribution && typeof a.attribution === 'object' ? a.attribution : {}) as Record<string, unknown>;
+    const arm = text(at.arm, 40);
+    if (!arm) return '{}';
+    const ok = this.one('SELECT 1 FROM ad_arms a JOIN ad_campaigns c ON c.id = a.campaign_id WHERE a.id = ? AND c.beat_id = ?', arm, beatId);
+    if (!ok) return '{}';
+    return JSON.stringify({ arm, clickId: text(at.clickId, 300) || undefined, ip: text(req.ip, 60) || undefined, ua: text(req.ua, 300) || undefined });
   }
 
   /** The worker reaches this object over Rork's DO router: POST /op { op, token, args }. */
@@ -574,8 +605,8 @@ export class KartaDB extends DurableObject<Env> {
       success_url: `${this.web}/library?paid=${orderId}`, cancel_url: `${this.web}/beat/${b.id}`,
     });
     this.sql.exec(
-      "INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-      orderId, me.id, me.email, String(b.id), String(b.producer_id), license, offer.price, fee, session.id, Date.now(),
+      "INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, session_id, created_at, attribution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+      orderId, me.id, me.email, String(b.id), String(b.producer_id), license, offer.price, fee, session.id, Date.now(), this.attribution(a, String(b.id), (a.request ?? {}) as Args),
     );
     return { url: session.url, orderId };
   }
@@ -615,6 +646,9 @@ export class KartaDB extends DurableObject<Env> {
       this.sql.exec('UPDATE posts SET hidden = 1 WHERE beat_id = ?', String(beat.id));
       this.sql.exec('DELETE FROM favorites WHERE beat_id = ?', String(beat.id));
     }
+    // a sale from an ad click goes back to that platform so it can find more buyers like this one
+    const paid = this.one('SELECT * FROM orders WHERE id = ?', orderId)!;
+    if (String(paid.attribution) !== '{}') this.ctx.waitUntil(ads.reportSale(this.env, this.sql, paid).catch(() => undefined));
     return { ok: true, orderId, license: order.license };
   }
 
@@ -791,6 +825,83 @@ export class KartaDB extends DurableObject<Env> {
     return { key: `beats/${j.beat_id}/art-${kind}` };
   }
 
+  /* ---------------- ads runner ---------------- */
+  op_adsOverview(v: Viewer) {
+    const me = this.need(v, 'producer');
+    return { connections: ads.connections(this.env, this.sql, me.id), campaigns: ads.list(this.sql, me.id) };
+  }
+  op_adsConnect(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.connectUrl(this.env, this.sql, me.id, a.platform, text(a.origin, 200)); }
+  async op_adsCallback(_: Viewer, a: Args) { return ads.finishConnect(this.env, this.sql, a.platform, text(a.code, 2000), text(a.state, 200), text(a.origin, 200)); }
+  op_adsSetAccount(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.setAccount(this.sql, me.id, a.platform, a); }
+  op_adsDisconnect(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.disconnect(this.sql, me.id, a.platform); }
+
+  /** What the ads runner needs to know about a beat, with public URLs the platforms can fetch. */
+  private beatForAds(me: NonNullable<Viewer>, beatId: unknown, origin: string): ads.BeatInfo {
+    const b = this.ownBeat(me, beatId);
+    if (b.status !== 'live') throw new ApiError(400, 'Publish the beat before promoting it. Ads need a live store page.');
+    const files = JSON.parse(String(b.files)) as Record<string, string>, art = JSON.parse(String(b.art)) as Record<string, string>;
+    const api = (this.env.PUBLIC_API_URL ?? origin).replace(/\/$/, '');
+    const media = (k: string) => `${api}/media/beats/${b.id}/${k}`;
+    const tall = art.shortCinematic ? 'shortCinematic' : art.short ? 'short' : '';
+    const wide = art.cinematic ? 'cinematic' : art.youtube ? 'youtube' : '';
+    const prod = this.one('SELECT name FROM profiles WHERE user_id = ?', me.id);
+    const beat = this.withPrices(this.beatOut(b, null), me.id) as { from?: number };
+    return {
+      ready: { tall: !!tall, wide: !!wide },
+      beat: {
+        id: String(b.id), title: String(b.title), producer: String(prod?.name ?? ''), genre: String(b.genre), bpm: Number(b.bpm), key: String(b.musical_key),
+        tags: JSON.parse(String(b.tags)), priceFrom: Number(beat.from) || 2999, url: `${this.web}/beat/${b.id}`,
+        coverUrl: files.cover ? media('cover') : '', tallVideoUrl: tall ? media(tall) : undefined, wideVideoUrl: wide ? media(wide) : undefined,
+      },
+    };
+  }
+  async op_adsPreview(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.preview(this.env, this.sql, me.id, this.beatForAds(me, a.beatId, text(a.origin, 200)), a); }
+  async op_adsLaunch(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.launch(this.env, this.sql, me.id, this.beatForAds(me, a.beatId, text(a.origin, 200)), a); }
+  async op_adsSetLive(v: Viewer, a: Args) {
+    const me = this.need(v, 'producer');
+    const r = await ads.setLive(this.env, this.sql, me.id, text(a.id, 40), a.live !== false);
+    if (a.live !== false && !(await this.ctx.storage.getAlarm())) await this.ctx.storage.setAlarm(Date.now() + ads.RUN_EVERY);
+    return r;
+  }
+  async op_adsRunNow(v: Viewer, a: Args) {
+    const me = this.need(v, 'producer');
+    const c = this.one('SELECT beat_id FROM ad_campaigns WHERE id = ? AND user_id = ?', text(a.id, 40), me.id);
+    if (!c) throw new ApiError(404, 'Campaign not found.');
+    await ads.runCampaign(this.env, this.sql, text(a.id, 40), this.avgOrder(String(c.beat_id)));
+    return ads.detail(this.sql, me.id, text(a.id, 40));
+  }
+  op_adsDetail(v: Viewer, a: Args) { const me = this.need(v, 'producer'); return ads.detail(this.sql, me.id, text(a.id, 40)); }
+
+  /** Sandbox only: let `hours` pass; buyers who clicked convert at each platform's sandbox rate. */
+  async op_devAdsSimulate(v: Viewer, a: Args) {
+    if (this.env.ADS_SANDBOX !== '1') throw new ApiError(403, 'Only in ads sandbox mode.');
+    const me = this.need(v, 'producer');
+    const id = text(a.id, 40);
+    const c = this.one('SELECT * FROM ad_campaigns WHERE id = ? AND user_id = ?', id, me.id);
+    if (!c) throw new ApiError(404, 'Campaign not found.');
+    const rate = { meta: 0.02, tiktok: 0.035, google: 0.006 } as Record<string, number>;
+    let seed = Number(a.seed ?? 1) >>> 0;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const out: Record<string, { clicks: number; sales: number }> = {};
+    for (const r of ads.sandboxAdvance(this.sql, id, Math.max(1, Math.min(72, Number(a.hours) || 24)))) {
+      let sales = 0;
+      for (let i = 0; i < r.clicks; i++) if (rnd() < rate[r.platform]) sales++;
+      out[r.platform] = { clicks: r.clicks, sales };
+      // each simulated sale is a real paid order from a sandbox buyer, attributed to the arm
+      for (let i = 0; i < sales; i++) {
+        const buyer = this.one("SELECT u.id, u.email FROM users u WHERE u.role = 'buyer' AND u.id != ? ORDER BY u.created_at LIMIT 1", me.id);
+        if (!buyer) break;
+        const orderId = uid('o_');
+        const price = this.avgOrder(String(c.beat_id));
+        this.sql.exec("INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, created_at, attribution) VALUES (?, ?, ?, ?, ?, 'lease', ?, ?, 'pending', ?, ?)",
+          orderId, String(buyer.id), String(buyer.email), String(c.beat_id), me.id, price, Math.round(price / 10), Date.now(), JSON.stringify({ arm: r.arm, clickId: `sim-${orderId}` }));
+        // repeat leases from one sandbox buyer are fine here; this is simulated demand
+        await this.fulfil(orderId);
+      }
+    }
+    return out;
+  }
+
   /** Test-mode only (no STRIPE_SECRET_KEY): lets local dev mark payouts ready. */
   op_devPayoutsReady(v: Viewer) {
     if (this.env.STRIPE_SECRET_KEY) throw new ApiError(403, 'Not available when Stripe is configured.');
@@ -810,8 +921,8 @@ export class KartaDB extends DurableObject<Env> {
     if (!offer) throw new ApiError(400, 'That license isn’t offered for this beat.');
     const orderId = uid('o_');
     const fee = Math.round((offer.price * Number(this.env.PLATFORM_FEE_BPS ?? '1000')) / 10_000);
-    this.sql.exec("INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-      orderId, me.id, me.email, String(b.id), String(b.producer_id), license, offer.price, fee, Date.now());
+    this.sql.exec("INSERT INTO orders (id, buyer_id, buyer_email, beat_id, producer_id, license, amount_cents, fee_cents, status, created_at, attribution) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+      orderId, me.id, me.email, String(b.id), String(b.producer_id), license, offer.price, fee, Date.now(), this.attribution(a, String(b.id), (a.request ?? {}) as Args));
     return { orderId };
   }
 }

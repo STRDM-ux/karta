@@ -1,0 +1,9 @@
+{
+  "name": "@karta/ads",
+  "version": "0.1.0",
+  "description": "Karta auto ads runner: Meta, TikTok and Google Ads adapters, AI planner, budget optimizer.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -p .", "test": "node --import tsx --test test/*.test.ts" }
+}

@@ -147,7 +147,7 @@ route('POST', '/studio/payouts/dashboard', (c) => call(c, 'dashboardLink'));
 
 /* ---------- buyers ---------- */
 route('GET', '/library', (c) => call(c, 'library'));
-route('POST', '/checkout', async (c) => call(c, 'checkout', await body(c.request)));
+route('POST', '/checkout', async (c) => call(c, 'checkout', { ...(await body(c.request)), request: { ip: c.request.headers.get('CF-Connecting-IP') ?? '', ua: c.request.headers.get('User-Agent') ?? '' } }));
 route('GET', '/dl/:token/:kind', async (c) => {
   const r = await op<{ key?: string; filename?: string; agreement?: string }>(c.env, 'resolveDownload', null, { token: c.params[0], kind: c.params[1] });
   if (r.agreement) return new Response(r.agreement, { headers: { ...CORS, 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': 'attachment; filename="karta-license.txt"' } });
@@ -192,6 +192,30 @@ route('PUT', '/internal/jobs/:id/files/:kind', async (c) => {
   return json({ ok: true, data: { key } });
 });
 route('POST', '/internal/jobs/:id', async (c) => { renderAuth(c); return call(c, 'artDone', { ...(await body(c.request)), jobId: c.params[0] }); });
+
+/* ---------- auto ads runner ---------- */
+route('GET', '/studio/ads', (c) => call(c, 'adsOverview'));
+route('POST', '/studio/ads/connect/:platform', (c) => call(c, 'adsConnect', { platform: c.params[0], origin: c.url.origin }));
+route('DELETE', '/studio/ads/connect/:platform', (c) => call(c, 'adsDisconnect', { platform: c.params[0] }));
+route('PATCH', '/studio/ads/account/:platform', async (c) => call(c, 'adsSetAccount', { ...(await body(c.request)), platform: c.params[0] }));
+route('GET', '/ads/callback/:platform', async (c) => {
+  const web = (c.env.WEB_URL ?? 'https://karta.strdm.io').replace(/\/$/, '');
+  const code = c.url.searchParams.get('code') ?? c.url.searchParams.get('auth_code') ?? '';
+  const state = c.url.searchParams.get('state') ?? '';
+  if (!code) return Response.redirect(`${web}/studio/ads?error=${encodeURIComponent(c.url.searchParams.get('error_description') ?? 'The connection was cancelled.')}`, 302);
+  try {
+    await op(c.env, 'adsCallback', null, { platform: c.params[0], code, state, origin: c.url.origin });
+    return Response.redirect(`${web}/studio/ads?connected=${c.params[0]}`, 302);
+  } catch (e) {
+    return Response.redirect(`${web}/studio/ads?error=${encodeURIComponent((e as Error).message)}`, 302);
+  }
+});
+route('POST', '/studio/ads/preview', async (c) => call(c, 'adsPreview', { ...(await body(c.request)), origin: c.url.origin }));
+route('POST', '/studio/ads/campaigns', async (c) => call(c, 'adsLaunch', { ...(await body(c.request)), origin: c.url.origin }));
+route('GET', '/studio/ads/campaigns/:id', (c) => call(c, 'adsDetail', { id: c.params[0] }));
+route('POST', '/studio/ads/campaigns/:id/live', async (c) => call(c, 'adsSetLive', { ...(await body(c.request)), id: c.params[0] }));
+route('POST', '/studio/ads/campaigns/:id/run', (c) => call(c, 'adsRunNow', { id: c.params[0] }));
+route('POST', '/dev/ads/simulate/:id', async (c) => call(c, 'devAdsSimulate', { ...(await body(c.request)), id: c.params[0] }));
 
 /* ---------- local development without Stripe keys ---------- */
 route('POST', '/dev/payouts-ready', (c) => call(c, 'devPayoutsReady'));

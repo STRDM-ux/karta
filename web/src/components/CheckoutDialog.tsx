@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { Check, Loader2, Lock, ShieldCheck, X } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { attribution } from "@/lib/attribution";
 import { money } from "@/lib/format";
 import type { Beat, LicenseId } from "@/lib/types";
 import { useAuth } from "@/hooks/useAuth";
@@ -31,7 +32,7 @@ export function CheckoutDialog({ beat: initial, onClose }: { beat: Beat; onClose
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ url: string }>("/checkout", { body: { beatId: beat.id, license: pick } });
+      const r = await api<{ url: string }>("/checkout", { body: { beatId: beat.id, license: pick, attribution: attribution() } });
       window.location.href = r.url;
     } catch (e) {
       setError((e as Error).message);
