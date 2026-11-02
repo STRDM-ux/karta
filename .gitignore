@@ -6,3 +6,4 @@ out
 *.mp4
 .dev.vars
 .wrangler
+dist

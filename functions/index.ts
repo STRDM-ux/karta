@@ -195,7 +195,8 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api(?=\/)/, '').replace(/\/$/, '') || '/';
     const auth = request.headers.get('Authorization') ?? '';
-    const token = auth.startsWith('Bearer ') && !path.startsWith('/internal/') ? auth.slice(7) : null;
+    // <audio> can't send headers, so media GETs may carry the session as ?t= (producers previewing drafts)
+    const token = path.startsWith('/internal/') ? null : auth.startsWith('Bearer ') ? auth.slice(7) : (path.startsWith('/media/') && url.searchParams.get('t')) || null;
     try {
       for (const r of routes) {
         if (r.method !== request.method && !(r.method === 'GET' && request.method === 'HEAD')) continue;
